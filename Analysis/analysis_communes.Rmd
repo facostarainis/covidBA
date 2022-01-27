@@ -1,0 +1,324 @@
+---
+title: "COVID 19 CABA // ANALYSIS COMMUNES"
+output: html_notebook
+---
+
+### Load libraries
+
+```{r}
+library(tidyverse) #for all functions in tidyverse
+library(lubridate) #for dates format
+#library(zoo) #for moving averages
+#library('skimr')
+
+```
+
+### General functions
+
+```{r}
+
+#Percentage
+perc <- function (quant,total) {
+  p <- quant/total
+  p - 1
+  p * 100
+}
+```
+
+### Import datasets
+
+```{r}
+#Confirmed Covid cases
+covid_CABA_confirmed <- read.csv("clean_covid_CABA_confirmed.csv", stringsAsFactors = FALSE)
+
+#Deaths by Covid
+covid_CABA_dead <- read.csv("clean_covid_CABA_dead.csv", stringsAsFactors = FALSE)
+
+#Population data
+
+population_data <- read.csv("clean_population_data.csv", stringsAsFactors = FALSE)
+population_data$X <- NULL
+
+```
+
+## ANALYSIS
+
+### COMMUNES
+
+Create a dataframe with the number of cases per commune and add the population per commune:
+
+```{r}
+
+#Create temporary dataframes for confirmed cases and deaths and rename columns
+
+cases_by_commune_temp <- data.frame(table(covid_CABA_confirmed$commune))
+deaths_by_commune_temp <- data.frame(table(covid_CABA_dead$commune))
+
+colnames(cases_by_commune_temp) <-c("commune","confirmed_cases")
+cases_by_commune_temp$commune <- as.numeric(cases_by_commune_temp$commune)
+
+colnames(deaths_by_commune_temp) <-c("commune","deaths")
+deaths_by_commune_temp$commune <- as.numeric(deaths_by_commune_temp$commune)
+
+#Add to dataframe
+#
+#1. Cases
+#2. Cases by 1M
+#3. Deaths
+#4. Deaths by 1M
+#5. Mortality rate
+
+cases_by_commune <- population_data %>%
+  left_join(cases_by_commune_temp, by = "commune")
+
+cases_by_commune <- cases_by_commune %>%
+  mutate(confirmed_by_1M = round(1000000 * confirmed_cases / population)) %>%
+  arrange(confirmed_by_1M)
+
+cases_by_commune <- cases_by_commune %>%
+  left_join(deaths_by_commune_temp, by = "commune")
+
+cases_by_commune <- cases_by_commune %>%
+  mutate(deaths_by_1M = round(1000000 * deaths / population))
+
+cases_by_commune <- cases_by_commune %>%
+  mutate(mortality_rate = round(deaths / confirmed_cases * 100))
+
+#Sort
+
+cases_by_commune <- arrange(cases_by_commune, commune)
+
+#Check dataframe
+
+cases_by_commune
+
+```
+
+Save confirmed cases and deaths occurring in unknown communes:
+
+```{r}
+
+confirmed_unknown_commune = nrow(covid_CABA_confirmed[covid_CABA_confirmed$commune == '',])
+
+deaths_unknown_commune = nrow(covid_CABA_dead[covid_CABA_dead$commune == '',])
+
+```
+
+
+### Calculate cumulative cases and cumulative cases per million, per month, per commune
+
+```{r}
+
+#Group by year and month
+
+cumulative_cases_commune <- covid_CABA_confirmed %>%
+  group_by(commune, 'year' = year(case_date), 'month' = format.Date(case_date, "%m")) %>%
+  tally()
+
+#Remove cases without identified commune
+
+cumulative_cases_commune <- cumulative_cases_commune[!(is.na(cumulative_cases_commune$commune) | cumulative_cases_commune$commune==""), ]
+
+#Create a column for months and delete unnecessary year column
+
+cumulative_cases_commune$month <- as.character(paste(cumulative_cases_commune$year, cumulative_cases_commune$month))
+
+cumulative_cases_commune$year <- NULL
+
+
+#Create the table with pivot_wider, taking the months as column name and set the months with no cases to 0
+
+cumulative_cases_commune <- cumulative_cases_commune %>% pivot_wider(names_from = month, values_from = n)
+
+cumulative_cases_commune[is.na(cumulative_cases_commune)] <- 0
+
+#Transpose, calculate the cumulative sum and transpose again. Then re-add the column with the names of the communes
+
+cumulative_cases_commune <- as.data.frame(t(apply(t(cumulative_cases_commune[,-1]),2, cumsum))) %>% add_column("commune"=population_data$commune, .before = '2020 03')
+
+#Put the names of the months in columns
+
+names(cumulative_cases_commune)[-1] <- paste(month.abb[as.numeric(sub(".* ", "", names(cumulative_cases_commune[-1])))], substr(names(cumulative_cases_commune[-1]), 1,4), sep = " ")
+
+
+#Calculate cumulative cases per 1M
+
+cumulative_cases_1M_commune <- round(1000000 * cumulative_cases_commune[-1] / t(population_data$population)) %>%
+  add_column("commune"=population_data$commune, .before = 'Mar 2020')
+
+
+#Check dataframes
+
+cumulative_cases_commune
+cumulative_cases_1M_commune
+
+
+```
+
+
+### Repeat the procedure for cumulative deaths/cumulative deaths per 1M, per month, per commune
+
+
+```{r}
+
+#Group by year and month
+
+cumulative_deaths_commune <- covid_CABA_dead %>%
+  group_by(commune, 'year' = year(case_date), 'month' = format.Date(case_date, "%m")) %>%
+  tally()
+
+#Remove cases without identified commune
+
+cumulative_deaths_commune <- cumulative_deaths_commune[!(is.na(cumulative_deaths_commune$commune) | cumulative_deaths_commune$commune==""), ] 
+
+
+#Create a column for months and delete unnecessary year column
+
+cumulative_deaths_commune$month <- as.character(paste(cumulative_deaths_commune$year, cumulative_deaths_commune$month))
+
+cumulative_deaths_commune$year <- NULL
+
+#Create the table with pivot_wider, taking the months as column name and set the months with no cases to 0
+
+
+cumulative_deaths_commune <- cumulative_deaths_commune %>% pivot_wider(names_from = month, values_from = n)
+
+cumulative_deaths_commune[is.na(cumulative_deaths_commune)] <- 0
+
+# Remove commune column and sort by month using column names
+
+cumulative_deaths_commune <-  cumulative_deaths_commune[-1]
+
+cumulative_deaths_commune <-  cumulative_deaths_commune[, order(names(cumulative_deaths_commune))]
+
+#Transpose, calculate the cumulative sum and transpose again. Then re-add the column with the names of the communes
+
+cumulative_deaths_commune <- as.data.frame(t(apply(t(cumulative_deaths_commune),2, cumsum))) %>% add_column("commune"=population_data$commune, .before = '2020 03')
+  
+
+#Put the names of the months in columns
+
+names(cumulative_deaths_commune)[-1] <- paste(month.abb[as.numeric(sub(".* ", "", names(cumulative_deaths_commune[-1])))], substr(names(cumulative_deaths_commune[-1]), 1,4), sep = " ")
+
+
+#Calculate cumulative deaths per 1M
+
+cumulative_deaths_1M_commune <- round(1000000 * cumulative_deaths_commune[-1] / t(population_data$population)) %>% add_column("commune"=population_data$commune, .before = 'Mar 2020')
+
+#Check dataframes
+
+cumulative_deaths_commune
+cumulative_deaths_1M_commune
+
+```
+
+## Is there any correlation between final cases/deaths figures and income, overcrowding or poverty?
+
+```{r}
+
+
+correlation_table <- cases_by_commune[, c(4,5,6,7,8,9,10,11)]
+cor(correlation_table)
+
+
+```
+
+## There's no strong correlation with the final figures. But if we try month by month?
+
+
+```{r}
+
+#Create a dataframe to store monthly cumulative correlations between cases/deaths and poverty
+
+correlation_poverty <- cumulative_cases_1M_commune[(0:4),]
+correlation_poverty[,] <- 0
+
+colnames(correlation_poverty)[1] <- ''
+correlation_poverty[1,1] <- 'cases'
+correlation_poverty[2,1] <- 'cases_1M'
+correlation_poverty[3,1] <- 'deaths'
+correlation_poverty[4,1] <- 'deaths_1M'
+
+#Populate the dataframe by correlating monthly cumulative figures with poverty
+#
+#NOTE: probably there's a better way of doing this without using a "for" loop
+
+for (i in 2:ncol(cumulative_cases_commune)) { #from mar 2020 to jan 2022
+   
+   correlation_poverty[1,i] <- cor(cumulative_cases_commune[i],population_data$poverty) #correlate with cases
+  
+  correlation_poverty[2,i] <- cor(cumulative_cases_1M_commune[i],population_data$poverty) #correlate with cases by 1M
+  
+  correlation_poverty[3,i] <- cor(cumulative_deaths_commune[i],population_data$poverty) #correlate with deaths
+  
+  correlation_poverty[4,i] <- cor(cumulative_deaths_1M_commune[i],population_data$poverty) #correlate with deaths by 1M
+}
+
+#Check correlation
+
+correlation_poverty
+
+```
+
+## Repeat procedure to correlate between poverty and overcrowding
+
+```{r}
+
+#Create a dataframe to store monthly cumulative correlations between cases/deaths and overcrowding
+
+correlation_overcrowding <- cumulative_cases_1M_commune[(0:4),]
+correlation_overcrowding[,] <- 0
+
+colnames(correlation_overcrowding)[1] <- ''
+correlation_overcrowding[1,1] <- 'cases'
+correlation_overcrowding[2,1] <- 'cases_1M'
+correlation_overcrowding[3,1] <- 'deaths'
+correlation_overcrowding[4,1] <- 'deaths_1M'
+
+#Populate the dataframe by correlating monthly cumulative figures with overcrowding
+#
+#NOTE: probably there's a better way of doing this without using a "for" loop
+
+for (i in 2:ncol(cumulative_cases_commune)) { #from mar 2020 to jan 2022
+  correlation_overcrowding[1,i] <- cor(cumulative_cases_commune[i],population_data$overcrowding) #correlate with cases
+  
+  correlation_overcrowding[2,i] <- cor(cumulative_cases_1M_commune[i],population_data$overcrowding) #correlate with cases by 1M
+  
+  correlation_overcrowding[3,i] <- cor(cumulative_deaths_commune[i],population_data$overcrowding) #correlate with deaths
+  
+  correlation_overcrowding[4,i] <- cor(cumulative_deaths_1M_commune[i],population_data$overcrowding) #correlate with deaths by 1M
+}
+
+#Check correlation
+
+correlation_overcrowding
+
+```
+
+### Export tables
+
+```{r}
+
+#Cases by commune
+write.csv(cases_by_commune, "final_cases_by_commune.csv")
+
+#Cumulative cases per commune
+write.csv(cumulative_cases_commune,"final_cumulative_cases_by_commune.csv")
+
+#Cumulative cases by 1M per commune
+write.csv(cumulative_cases_1M_commune,"final_cumulative_cases_1M_by_commune.csv")
+
+#Cumulative deaths per commune
+write.csv(cumulative_deaths_commune,"final_cumulative_deaths_by_commune.csv")
+
+#Cumulative deaths by 1M per commune
+write.csv(cumulative_deaths_1M_commune,"final_cumulative_deaths_1M_by_commune.csv")
+
+#Monthly correlation between cases/deaths and poverty
+write.csv(correlation_poverty, "final_correlation_poverty.csv")
+
+#Monthly correlation between cases/deaths and overcrowding
+write.csv(correlation_overcrowding, "final_correlation_overcrowding.csv")
+
+
+```

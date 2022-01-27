@@ -1,0 +1,129 @@
+---
+title: "COVID 19 CABA // CLEANING AND PREPARING DATABASES"
+output: html_notebook
+---
+
+### Load libraries
+
+```{r}
+library(tidyverse) #for all functions in tidyverse
+library(lubridate) #for dates format
+```
+
+### Import all datasets
+
+```{r}
+
+#All Covid possible cases in CABA (Ciudad Autónoma de Buenos Aires). 
+covid_all_cases <- read.csv("casos_covid19.csv", stringsAsFactors = FALSE)
+
+#Vaccination in CABA
+vaccination_all <- read.csv("dataset_total_vacunas.csv", stringsAsFactors = FALSE)
+
+#Population and density by commune according to 2020 projection from 2010 census
+population_by_commune <- read.csv("population_by_commune.csv", stringsAsFactors = FALSE)
+
+total_population <- sum(population_by_commune$population)
+
+#Population by neighborhood according to 2010 census
+population_by_neighborhood <- read.csv("caba_pob_barrios_2010.csv", stringsAsFactors = FALSE)
+
+#Overcrowding per commune
+overcrowding_by_commune <- read.csv("overcrowding.csv", stringsAsFactors = FALSE)
+
+#Average income for +10 years old population
+income_plus_10_by_commune <- read.csv("income_plus_10.csv", stringsAsFactors = FALSE)
+
+#Poverty percentage per commune
+poverty_by_commune <- read.csv("poverty.csv", stringsAsFactors = FALSE)
+
+#Neighborhood per commune
+neighborhood_by_commune <- read.csv("barrios_comunas.csv", stringsAsFactors = FALSE)
+
+
+```
+
+
+### Cleaning and preparing datasets
+
+- Check datasets for Covid cases and vaccination:
+
+```{r}
+head(covid_all_cases) # Column names are in Spanish
+
+head(vaccination_all) # Column names are already translated to English 
+```
+
+- Keep only necessary columns, and change name to English:
+
+```{r}
+covid_all_cases <- covid_all_cases[c(2,5,6,7,8,9,10,11,12)]
+
+colnames(covid_all_cases) <-c("case_date","region","neighborhood", "commune","gender","age","case_type","death_date","dead")
+
+colnames(population_by_neighborhood) <-c("neighborhood", "population")
+
+colnames(neighborhood_by_commune) <-c("neighborhood", "commune")
+
+```
+
+- Fix dates format for cases, deaths and vaccination:
+
+```{r}
+
+#For Covid cases and deaths
+
+covid_all_cases$case_date <- substr(covid_all_cases$case_date,1,nchar(covid_all_cases$case_date)-16)
+
+covid_all_cases$death_date <- substr(covid_all_cases$death_date,1,nchar(covid_all_cases$death_date)-16)
+
+covid_all_cases$case_date <- dmy(covid_all_cases$case_date)
+
+covid_all_cases$death_date <- dmy(covid_all_cases$death_date)
+
+#For vaccination
+
+vaccination_all$date <- substr(vaccination_all$date,1,nchar(vaccination_all$date)-9)
+
+vaccination_all$date <- dmy(vaccination_all$date)
+
+```
+
+
+- Create a dataframe with possible cases from CABA residents:
+
+```{r}
+covid_CABA_cases <- subset(covid_all_cases, covid_all_cases$region == 'CABA')
+
+```
+
+- Create a dataframe for confirmed cases and another subset for deadly confirmed cases:
+
+*I subset the latter from covid_CABA_confirmed and not from covid_CABA_cases because there are people who were tested and died with suspected Covid, but it was later confirmed that their death was due to other causes.*
+
+```{r}
+
+covid_CABA_confirmed <- subset(covid_CABA_cases, covid_CABA_cases$case_type == 'confirmado')
+
+covid_CABA_dead <-subset(covid_CABA_confirmed, covid_CABA_confirmed$dead == 'si')
+```
+
+- Create a dataframe with socio-economic and demographic data by commune
+
+```{r}
+
+population_data <- population_by_commune %>%
+  left_join(overcrowding_by_commune, by = "commune") %>%
+  left_join(poverty_by_commune, by = "commune") %>%
+  left_join(income_plus_10_by_commune, by = "commune")
+
+```
+
+### Export dataframes as CSVs
+
+```{r}
+write.csv(covid_CABA_dead, "clean_covid_CABA_dead.csv")
+write.csv(covid_CABA_confirmed, "clean_covid_CABA_confirmed.csv")
+write.csv(population_data, "clean_population_data.csv")
+write.csv(vaccination_all, "clean_vaccination.csv")
+```

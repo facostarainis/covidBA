@@ -1,0 +1,435 @@
+---
+title: "COVID 19 CABA // GENERAL ANALYSIS CABA: CASES AND VACCINATION"
+output: html_notebook
+---
+
+### Load libraries
+
+```{r}
+library(tidyverse) #for all functions in tidyverse
+library(zoo) #for moving averages
+library(lubridate) #for dates format
+
+```
+
+### General functions
+
+```{r}
+
+#Percentage
+perc <- function (quant,total) {
+  p <- quant/total
+  p - 1
+  p * 100
+}
+
+```
+
+### Import datasets & create main variables
+
+```{r}
+
+#Confirmed Covid cases
+covid_CABA_confirmed <- read.csv("clean_covid_CABA_confirmed.csv", stringsAsFactors = FALSE)
+
+#Deaths by Covid
+covid_CABA_dead <- read.csv("clean_covid_CABA_dead.csv", stringsAsFactors = FALSE)
+
+#Population data
+population_data <- read.csv("clean_population_data.csv", stringsAsFactors = FALSE)
+population_data$X <- NULL
+
+total_population <- sum(population_data$population)
+
+#Vaccination
+vaccination_all <- read.csv("clean_vaccination.csv", stringsAsFactors = FALSE)
+vaccination_all$X <- NULL
+vaccination_all[is.na(vaccination_all)] <- 0
+
+```
+
+## ANALYSIS
+
+### TOTAL CASES
+
+Create a dataframe of cases and deaths per day:
+
+```{r}
+
+#Create a dataframe with:
+#
+#1. Cases
+#2. Cumulative cases
+#3. Deaths per day
+#4. Cumulative deaths
+#5. Mortality rate
+#6. Rolling average deaths for the last 7 days
+
+cases_by_date <- data.frame(table(covid_CABA_confirmed$case_date))
+deaths_by_date_temp <- data.frame(table(covid_CABA_dead$death_date))
+  
+colnames(cases_by_date) <-c("date","confirmed_cases")
+colnames(deaths_by_date_temp) <-c("date","deaths")
+
+cases_by_date <- cases_by_date %>%
+  left_join(deaths_by_date_temp, by = "date")
+
+#Add missing days
+cases_by_date <- cases_by_date %>%
+  mutate(date = as.Date(date)) %>%
+  complete(date = seq.Date(min(date), max(date), by="day"))
+
+#Add average number of cases and deaths per 7 days
+cases_by_date[is.na(cases_by_date)] <- 0
+
+cases_by_date <- cases_by_date %>%
+  mutate(avg_cases_per_week = round(rollmeanr(confirmed_cases, k = 7, fill = NA),2),
+avg_deaths_per_week = round(rollmeanr(deaths, k = 7, fill = NA),2))
+
+#Add cumulative cases, cumulative deaths and mortality
+cases_by_date <- cases_by_date %>%
+  mutate(cumulative_cases = cumsum(confirmed_cases),
+cumulative_deaths = cumsum(deaths))
+
+cases_by_date$mortality <- round(cases_by_date$cumulative_deaths * 100 / cases_by_date$cumulative_cases,2)
+
+```
+
+### Create a function to calculate cases, deaths and mortality between specific dates
+
+```{r}
+
+cases_between_dates <- function (initial_date, final_date) {
+  
+  cumulative_cases_deaths_mortality <- c(0,0,0)
+  
+  date_range <- subset(cases_by_date, cases_by_date$date>=initial_date & cases_by_date$date<= final_date)
+  
+  cumulative_cases_deaths_mortality[1] <- (sum(date_range$confirmed_cases))
+  cumulative_cases_deaths_mortality[2] <- (sum(date_range$deaths))
+  cumulative_cases_deaths_mortality[3] <- round(cumulative_cases_deaths_mortality[2]*100/cumulative_cases_deaths_mortality[1],2)
+  
+  return(cumulative_cases_deaths_mortality)
+}
+
+```
+
+- Test function:
+
+```{r}
+
+#First wave
+cases_between_dates("2020/05/01","2020/11/01")
+
+#Second wave
+cases_between_dates("2021/03/01","2021/09/01")
+                    
+#Third wave
+cases_between_dates("2021/12/01","2022/01/18")
+
+```
+
+### Calculate confirmed cases age over time (cumulative per day & month by month)
+
+- Create dataframe:
+
+```{r}
+
+#Drops unknown ages, impossible ages, unnecessary columns, and arrange by case date
+
+avg_cases_age <- covid_CABA_confirmed %>%
+  drop_na(age) %>%
+  subset(age>=0 & age <=110 ) %>%
+  arrange(case_date)
+
+avg_cases_age <- avg_cases_age[,c("case_date","age")]
+
+#Record impossible ages for accuracy
+
+impossible_ages <- filter(covid_CABA_confirmed, age >= 110 | age < 0)
+
+```
+
+- Create another dataframe to calculate average age per month for confirmed cases:
+
+```{r}
+
+avg_age_per_month <- avg_cases_age 
+
+#  Get months
+
+avg_age_per_month$case_date <- as.Date(avg_age_per_month$case_date)
+avg_age_per_month$month <- format(as.Date(avg_age_per_month$case_date), "%Y-%m")
+
+#  Aggregate age on months and year and get mean
+avg_age_per_month <- aggregate( age ~ month , avg_age_per_month, mean)
+
+# Change to a nice date format (for datavis)
+
+avg_age_per_month$month <- as.yearmon(avg_age_per_month$month)
+        
+
+```
+
+- Calculate cumulative average age for confirmed cases day by day:
+
+```{r}
+
+#Calculate average per day
+
+avg_cases_age <- avg_cases_age %>% 
+ group_by(case_date) %>% 
+ mutate(avg_daily_age = mean(age)) %>% 
+ ungroup() %>%
+ mutate(avg_cumulative = round(cumsum(avg_daily_age) / seq_along(avg_daily_age),2))
+
+#Keep only last value for every day and add missing days
+
+avg_cases_age <-avg_cases_age[!duplicated(avg_cases_age$case_date, fromLast = T), ]  %>%
+   mutate(case_date = as.Date(case_date)) %>%
+   complete(case_date = seq.Date(min(case_date), max(case_date), by="day"))
+
+#Add missing values from last value, remove unnecessary columns
+
+avg_cases_age$avg_cumulative <- na.locf(avg_cases_age$avg_cumulative)
+
+avg_cases_age <- avg_cases_age[,c("case_date","avg_cumulative")]
+
+#Match colnames to general cases table
+
+colnames(avg_cases_age) <- c('date', 'cumulative_cases_age')
+
+cases_by_date <- cases_by_date %>%
+  left_join(avg_cases_age, by = "date")
+
+```
+
+### Calculate average death age over time (cumulative per day & month by month)
+
+- Create dataframe:
+
+```{r}
+
+#Drops unknown ages, unnecessary columns and arrange by death date
+
+avg_death_age <- covid_CABA_dead %>%
+  drop_na(age) %>%
+  arrange(death_date)
+
+avg_death_age <- avg_death_age[,c("death_date","age")]
+
+```
+
+- Create another dataframe to calculate average age per month for deadly cases:
+
+```{r}
+
+avg_death_age_per_month <- avg_death_age 
+
+#  Get months
+
+avg_death_age_per_month$death_date <- as.Date(avg_death_age_per_month$death_date)
+avg_death_age_per_month$month <- format(as.Date(avg_death_age_per_month$death_date), "%Y-%m")
+
+#  Aggregate age on months and year and get mean
+avg_death_age_per_month <- aggregate( age ~ month , avg_death_age_per_month, mean)
+
+# Change to a nice date format (for datavis)
+
+avg_death_age_per_month$month <- as.yearmon(avg_death_age_per_month$month)
+
+```
+
+- Join monthly tables
+
+```{r}
+
+# Change colnames and join monthly average age for confirmed cases and monthly average age for deadly cases tables
+
+colnames(avg_death_age_per_month)[2] <- 'death_age'
+
+avg_age_per_month <- avg_age_per_month %>%
+  left_join(avg_death_age_per_month, by = "month")
+
+```
+
+- Calculate cumulative average age for deadly cases day by day:
+
+```{r}
+
+#Calculate mean per day
+
+avg_death_age <- avg_death_age %>% 
+ group_by(death_date) %>% 
+ mutate(avg_daily_age = mean(age)) %>% 
+ ungroup() %>%
+ mutate(avg_cumulative = round(cumsum(avg_daily_age) / seq_along(avg_daily_age),2))
+
+#Keep only last value for every day and add missing days 
+
+avg_death_age <-avg_death_age[!duplicated(avg_death_age$death_date, fromLast = T), ]  %>%
+   mutate(death_date = as.Date(death_date)) %>%
+   complete(death_date = seq.Date(min(death_date), max(death_date), by="day"))
+
+#Add missing values from last value, remove unnecessary columns
+
+avg_death_age$avg_cumulative <- na.locf(avg_death_age$avg_cumulative)
+
+avg_death_age <- avg_death_age[,c("death_date","avg_cumulative")]
+
+#Match colnames and join with general cases table
+
+colnames(avg_death_age) <- c('date', 'cumulative_death_age')
+
+cases_by_date <- cases_by_date %>%
+  left_join(avg_death_age, by = "date")
+
+```
+
+
+### VACCINATION
+
+Calculate number and percentage of people vaccinated, per day, per dose
+
+```{r}
+
+#List amount of vaccinations by date, by number of doses and sort by date
+
+vaccination_by_date <- vaccination_all[c(1,6,7,9)] %>%
+  group_by_if(is.numeric %>% Negate) %>%
+    summarize_all(sum) %>%
+      arrange(date)
+```
+
+```{r}
+
+#Complete missing days and add 0s
+
+vaccination_by_date <- vaccination_by_date %>%
+  mutate(date = as.Date(date)) %>%
+  complete(date = seq.Date(min(date), max(date), by="day"))
+
+vaccination_by_date[is.na(vaccination_by_date)] <- 0
+```
+
+```{r}
+#Dose 1
+
+vaccination_by_date <- vaccination_by_date %>%
+  mutate(dose_1_cumulative = cumsum(dose_1), .after = dose_1) %>%
+    mutate(dose_1_perc = round(perc(dose_1_cumulative, total_population),2), .after = dose_1_cumulative)
+
+#Dose 2
+
+vaccination_by_date <- vaccination_by_date %>%
+  mutate(dose_2_cumulative = cumsum(dose_2), .after = dose_2) %>%
+    mutate(dose_2_perc = round(perc(dose_2_cumulative, total_population),2), .after = dose_2_cumulative)
+
+#Dose 3
+
+vaccination_by_date <- vaccination_by_date %>%
+  mutate(dose_3_cumulative = cumsum(dose_3), .after = dose_3) %>%
+    mutate(dose_3_perc = round(perc(dose_3_cumulative, total_population),2), .after = dose_3_cumulative)
+
+#Difference between 1st and 2nd dose
+
+vaccination_by_date <- vaccination_by_date %>%
+  mutate(difference_1_2 = c(vaccination_by_date$dose_1_perc - vaccination_by_date$dose_2_perc))
+
+```
+
+
+- Calculate number and vaccinations, per type, per day
+
+```{r}
+
+#Create a new dataframe
+
+vaccination_by_date_by_vaccine <- vaccination_all
+
+#Sum all vaccinations (for the same type of vaccine, gender, age, group and private/public institution) in the same day and rename col
+
+vaccination_by_date_by_vaccine$dose_1 <- vaccination_by_date_by_vaccine$dose_1 + vaccination_by_date_by_vaccine$dose_2 + vaccination_by_date_by_vaccine$dose_3
+
+colnames(vaccination_by_date_by_vaccine)[6]  <-  'vaccine_doses'
+
+#Delete unnecessary cols
+
+vaccination_by_date_by_vaccine <- vaccination_by_date_by_vaccine[c(1,4,6)] 
+
+#Simplify vaccine names
+
+vaccination_by_date_by_vaccine[vaccination_by_date_by_vaccine=="vacuna Coronavirus (CANSINO), vial x 1 dosis"] <- "Cansino"
+
+vaccination_by_date_by_vaccine[vaccination_by_date_by_vaccine=="vacuna Coronavirus (PFIZER) 1ra - 2da dosis, vial x 6 dosis (0.3ml)"] <- "Pfizer"
+
+#Sum all the vaccinations for the same date for the same type of vaccine
+
+vaccination_by_date_by_vaccine <- vaccination_by_date_by_vaccine %>%
+  group_by_if(is.numeric %>% Negate) %>%
+    summarize_all(sum) %>%
+      arrange(date) 
+
+#Transpose table using vaccine names an replace NAs for days without vaccines
+
+vaccination_by_date_by_vaccine <- vaccination_by_date_by_vaccine %>% pivot_wider(names_from = vaccine, values_from = vaccine_doses)
+
+vaccination_by_date_by_vaccine[is.na(vaccination_by_date_by_vaccine)] <- 0
+
+#Calculate cumulative vaccination per type of vaccine (for bar race chart)
+
+vaccination_cumulative <- vaccination_by_date_by_vaccine
+
+vaccination_cumulative <- as.data.frame(apply(vaccination_cumulative[,2:6],2, cumsum)) %>%
+  add_column("date"=vaccination_by_date_by_vaccine$date, .before = 'Sputnik')
+  
+
+```
+
+### Visualize some general data for CABA
+
+```{r}
+
+#Total population and percentage of the population infected
+
+population_CABA = sum(population_data$population)
+
+perc(nrow(covid_CABA_confirmed),population_CABA)
+
+#Evolution of cases and deaths
+
+barplot(height = cases_by_date$confirmed_cases)
+
+barplot(height = cases_by_date$deaths)
+
+#Total number of confirmed cases
+
+count(covid_CABA_confirmed)
+
+#Number of deaths
+
+count(covid_CABA_dead)
+
+
+
+```
+
+### Export tables
+
+```{r}
+
+#Cases by date
+write.csv(cases_by_date, "final_CABA_cases_by_date.csv")
+
+#Month by month cases an death average age
+write.csv(avg_age_per_month, "final_avg_age_per_month.csv")
+
+#Vaccination by date
+write.csv(vaccination_by_date,"final_vaccination_by_date.csv")
+
+#Cumulative vaccine doses per vaccine type
+write.csv(vaccination_cumulative,"final_bar_race.csv")
+
+
+```
+
